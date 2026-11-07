@@ -203,6 +203,7 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
     editing: null, editingIncome: null, confirmDelete: null,
     email: { busy: false, msg: "", items: null, applied: new Set() },
     names: {},
+    log: [], emailMeta: {},
   };
 
   // ---------- tiny DOM helper ----------
@@ -676,7 +677,43 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
             : h("button", { class: "danger", disabled: S.readOnly || null, onclick: () => { S.confirmDelete = inc.id; render(); } }, "Delete"))));
     }
 
-    v.append(h("div", { style: "display:grid;gap:14px" }, emailPanel(), settingsPanel(), bp, ip));
+    v.append(h("div", { style: "display:grid;gap:14px" }, logPanel(), emailPanel(), settingsPanel(), bp, ip));
+  }
+
+  // ---------- daily email check log ----------
+  const ACTION_TEXT = { amount: "Changed amount", day: "Changed due day", paid: "Checked off", newbill: "Added bill" };
+  async function undoLog(e) {
+    const ok = await write(async (db) => {
+      if (e.action === "paid" && e.paidKey) await db.doc("paid/" + e.paidKey).delete();
+      else if (e.action === "newbill" && e.billId) await db.doc("bills/" + e.billId).delete();
+      else if ((e.action === "amount" || e.action === "day") && e.billId && e.before) await db.doc("bills/" + e.billId).update(e.before);
+      await db.doc("emaillog/" + e.id).update({ undone: true, undoneBy: S.uid || null, undoneAt: new Date().toISOString() });
+    });
+    if (ok) setStatus("Undid that change.");
+  }
+  function logPanel() {
+    const meta = S.emailMeta;
+    const recent = S.log.slice(0, 15);
+    const p = h("div", { class: "panel" },
+      h("div", { class: "row spread" }, h("h2", { text: "Email updates" }),
+        h("span", { class: "small muted", text: meta.lastRun ? "Last daily check " + nice(parse(String(meta.lastRun).slice(0, 10))) + (meta.summary ? ": " + meta.summary : "") : "The daily check hasn't run yet." })),
+      h("p", { class: "note", text: "Claude checks Beverly's Gmail every morning and applies what it finds: new amounts, payments to check off, and new bills. Each change is listed here. Use Undo if it misread an email." }));
+    if (!recent.length) p.append(h("p", { class: "small muted", text: "No changes from email yet." }));
+    for (const e of recent) {
+      const after = e.after || {}, before = e.before || {};
+      let detail = "";
+      if (e.action === "amount") detail = m$(before.amount) + " → " + m$(after.amount);
+      else if (e.action === "day") detail = "the " + ordinal(Number(before.day) || 0) + " → the " + ordinal(Number(after.day) || 0);
+      else if (e.action === "paid") detail = (e.paidKey ? short(parse(e.paidKey.split("__")[1])) + " payment" : "") + (after.amount ? ", " + m$(after.amount) : "");
+      else if (e.action === "newbill") detail = m$(after.amount) + (after.day ? " on the " + ordinal(after.day) : "");
+      p.append(h("div", { class: "sugg" },
+        h("div", { class: "row spread" }, h("strong", { text: (ACTION_TEXT[e.action] || "Updated") + ": " + (e.billName || e.billId || "") }), h("span", { class: "num small", text: detail })),
+        e.evidence ? h("q", { text: String(e.evidence).slice(0, 200) }) : null,
+        h("div", { class: "row spread" },
+          h("span", { class: "small muted", text: [e.from, e.emailDate].filter(Boolean).join(" · ") }),
+          e.undone ? h("span", { class: "small muted", text: "Undone" }) : h("button", { disabled: S.readOnly || null, onclick: () => undoLog(e) }, "Undo"))));
+    }
+    return p;
   }
 
   // ---------- Gmail check ----------
@@ -752,7 +789,7 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
   function emailPanel() {
     const E = S.email;
     const p = h("div", { class: "panel" },
-      h("div", { class: "row spread" }, h("h2", { text: "Check email for bill updates" }), h("button", { class: "primary", disabled: E.busy || S.readOnly || null, onclick: checkEmail }, E.busy ? "Checking…" : "Check my email")),
+      h("div", { class: "row spread" }, h("h2", { text: "Check email now" }), h("button", { class: "primary", disabled: E.busy || S.readOnly || null, onclick: checkEmail }, E.busy ? "Checking…" : "Check my email")),
       h("p", { class: "note", text: "Searches your own Gmail for bill and payment emails from the last 3 weeks, and Claude pulls out the amounts. Nothing changes until you apply it. When Adam presses this, it searches his inbox instead, which covers the AmEx and State Farm emails." }));
     if (E.msg) p.append(h("p", { class: "small", role: "status", text: E.msg }));
     if (E.items) for (const [i, it] of E.items.entries()) {
@@ -830,6 +867,11 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
       S.paid = new Map(snap.docs.map((d) => [d.id, d.data()]));
       S.loaded.paid = true; render(); resolveNames();
     }, fail);
+    db.collection("emaillog").onSnapshot((snap) => {
+      S.log = snap.docs.map((d) => Object.assign({ id: d.id }, d.data())).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+      render();
+    }, () => {});
+    db.doc("meta/emailcheck").onSnapshot((snap) => { S.emailMeta = snap.exists ? Object.assign({}, snap.data()) : {}; render(); }, () => {});
     db.doc("settings/main").onSnapshot((snap) => {
       S.settings = snap.exists ? Object.assign({}, snap.data()) : {};
       S.loaded.settings = true; render();

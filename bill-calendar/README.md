@@ -48,3 +48,13 @@ All documents live in the artifact's shared database.
 - **Suggested transfer:** the lower of two numbers, rounded down to $5.
   - The average left over across the next 26 paychecks.
   - The largest steady transfer that keeps the projected balance above the cushion every day of the next year.
+
+## Daily email check
+
+A scheduled Claude task, "Bill email check", runs every morning at 7:43 Eastern. It reads the last three days of bill and payment emails and applies what it finds:
+
+- checks off payments
+- updates changed amounts
+- adds new recurring bills
+
+Each change is written to `emaillog/{messageId}-{action}` with the before and after values, and the page's Email updates panel can undo it. Each run also writes `meta/emailcheck`, with `lastRun` and a short `summary`.
