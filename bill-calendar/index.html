@@ -91,6 +91,7 @@ button:disabled { opacity: 0.55; cursor: default; }
 .chip .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .chip .a { font-family: var(--font-num); font-variant-numeric: tabular-nums; flex: none; }
 .chip.paid { color: var(--muted); text-decoration: line-through; }
+.chip.bonus { color: var(--payday); font-weight: 700; }
 .day .bal { margin-top: auto; font-family: var(--font-num); font-size: 0.7rem; color: var(--muted); text-align: right; }
 .day .bal.low { color: var(--danger); font-weight: 600; }
 .more { font-size: 0.7rem; color: var(--muted); }
@@ -249,6 +250,22 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
     const out = [];
     for (const inc of S.income) {
       if (houseOnly && !inc.toHouse) continue;
+      if (isBonus(inc)) {
+        // Lands on the first payday on or after `day` in each listed month.
+        const pa = payAnchor(), step = 14 * DAY;
+        const s = new Date(start - 31 * DAY), e = new Date(end - 1);
+        let y = s.getUTCFullYear(), m = s.getUTCMonth() + 1;
+        const ey = e.getUTCFullYear(), em = e.getUTCMonth() + 1;
+        while (y < ey || (y === ey && m <= em)) {
+          if (inc.months.includes(m)) {
+            const target = Date.UTC(y, m - 1, Math.min(Number(inc.day) || 15, dim(y, m)));
+            const t = pa + Math.ceil((target - pa) / step) * step;
+            if (t >= start && t < end) out.push({ inc, t, amount: Number(inc.amount) || 0 });
+          }
+          m++; if (m > 12) { m = 1; y++; }
+        }
+        continue;
+      }
       if (!inc.anchor) continue;
       const a = parse(inc.anchor), every = (Number(inc.everyDays) || 14) * DAY;
       let t = a + Math.ceil((start - a) / every) * every;
@@ -257,9 +274,12 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
     return out.sort((x, y) => x.t - y.t);
   }
 
+  const isBonus = (inc) => Array.isArray(inc.months) && inc.months.length > 0;
+  const bonusesIn = (s, e) => deposits(s, e, false).filter((d) => isBonus(d.inc) && !d.inc.toHouse);
+
   function payAnchor() {
     if (S.settings.payAnchor) return parse(S.settings.payAnchor);
-    const first = S.income.find((i) => i.toHouse && i.anchor);
+    const first = S.income.find((i) => i.toHouse && i.anchor && !isBonus(i));
     return first ? parse(first.anchor) : TODAY;
   }
   const curIndex = () => Math.floor((TODAY - payAnchor()) / (14 * DAY));
@@ -399,6 +419,7 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
     const dep = deposits(gridStart, gridEnd, true);
     const proj = project(Number(S.settings.transfer) || 0);
     const occBy = new Map(); for (const o of occ) { if (!occBy.has(o.t)) occBy.set(o.t, []); occBy.get(o.t).push(o); }
+    const bonusBy = new Map(); for (const d of bonusesIn(gridStart, gridEnd)) bonusBy.set(d.t, (bonusBy.get(d.t) || 0) + d.amount);
     const depBy = new Map(); for (const d of dep) depBy.set(d.t, (depBy.get(d.t) || 0) + d.amount);
 
     const go = (dm) => { let mm = m + dm, yy = y; if (mm < 1) { mm = 12; yy--; } if (mm > 12) { mm = 1; yy++; } S.month = { y: yy, m: mm }; render(); };
@@ -417,6 +438,7 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
       const cls = ["day"]; if (dd.getUTCMonth() + 1 !== m) cls.push("out"); if (t === TODAY) cls.push("today"); if (t === S.selected) cls.push("sel"); if (isPay) cls.push("payday");
       const cell = h("button", { class: cls.join(" "), onclick: () => { S.selected = t; render(); }, "aria-label": nice(t) + (isPay ? ", payday" : "") + (list.length ? ", " + list.length + " bills" : "") },
         h("div", { class: "dn" }, h("span", { text: dd.getUTCDate() }), isPay ? h("span", { class: "pd", text: "Payday" }) : null));
+      if (bonusBy.has(t)) cell.append(h("div", { class: "chip bonus" }, h("span", { class: "n", text: "Bonus" }), h("span", { class: "a", text: "+$" + Math.round(bonusBy.get(t)) })));
       const maxShow = 3;
       list.slice(0, maxShow).forEach((o) => cell.append(h("div", { class: "chip" + (o.paid ? " paid" : "") }, h("span", { class: "n", text: o.bill.name }), h("span", { class: "a", text: "$" + Math.round(o.amount) }))));
       if (list.length > maxShow) cell.append(h("div", { class: "more", text: "+" + (list.length - maxShow) + " more" }));
@@ -444,6 +466,7 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
       const left = p.excess;
       const card = h("div", { class: "panel" },
         h("div", { class: "row spread" }, h("h3", { text: (k === 0 ? "This paycheck · " : "") + short(p.s) + " – " + short(p.e - DAY) }), h("span", { class: "pill pay", text: m$(p.income) + " in" })));
+      for (const d of bonusesIn(p.s, p.e)) card.append(h("div", { class: "small" }, h("span", { class: "pill pay", text: "bonus" }), " " + d.inc.name + " ", h("strong", { class: "num", text: "+" + m$(d.amount) }), h("span", { class: "muted", text: " on " + short(d.t) + ", into Discretionary, not counted below" })));
       const items = h("div", { class: "items" });
       for (const o of p.occ) items.append(itemRow(o, { showDate: true }));
       if (!p.occ.length) items.append(h("p", { class: "muted small", text: "No dated bills in this pay period." }));
@@ -470,7 +493,8 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
         h("div", { class: "stat" }, h("span", { class: "label", text: "Average left per paycheck" }), h("span", { class: "value", text: m$(r.avg) }), h("span", { class: "sub", text: "over the next 26 paychecks" })),
         h("div", { class: "stat" }, h("span", { class: "label", text: "Most you can transfer safely" }), h("span", { class: "value", text: r.safe == null ? "—" : m$(Math.max(0, r.safe)) }), h("span", { class: "sub", text: r.safe == null ? "enter the House balance to calculate" : "keeps House above your cushion all year" })),
         h("div", { class: "stat good" }, h("span", { class: "label", text: "Suggested steady transfer" }), h("span", { class: "value", text: m$(r.rec) }), h("span", { class: "sub", text: "the lower of the two, rounded down to $5" }))));
-    const tbl = h("table", null, h("thead", null, h("tr", null, ...["Pay period", "Into House", "Dated bills", "Set aside", "Left over", T ? "After transfer" : null, "Running total"].filter(Boolean).map((t) => h("th", { scope: "col", text: t })))));
+    const hasBonus = S.income.some((i) => isBonus(i) && !i.toHouse);
+    const tbl = h("table", null, h("thead", null, h("tr", null, ...["Pay period", "Into House", "Dated bills", "Set aside", "Left over", T ? "After transfer" : null, "Running total", hasBonus ? "Bonus (Discretionary)" : null].filter(Boolean).map((t) => h("th", { scope: "col", text: t })))));
     const body = h("tbody");
     let run = 0;
     for (let k = -6; k <= 20; k++) {
@@ -483,7 +507,8 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
         h("td", { class: "num", text: m$(p.spread) }),
         h("td", { class: "num " + (p.excess < 0 ? "neg" : ""), text: m$(p.excess) }),
         T ? h("td", { class: "num " + (p.excess - T < 0 ? "neg" : ""), text: m$(p.excess - T) }) : null,
-        h("td", { class: "num muted", text: k >= 0 ? m$(run) : "" })));
+        h("td", { class: "num muted", text: k >= 0 ? m$(run) : "" }),
+        hasBonus ? (() => { const b = bonusesIn(p.s, p.e).reduce((a, d) => a + d.amount, 0); return h("td", { class: "num", style: "color:var(--payday)", text: b ? "+" + m$(b) : "" }); })() : null));
     }
     tbl.append(body);
     v.append(intro, h("div", { class: "panel" }, h("p", { class: "note", text: "Running total starts with this paycheck and adds what's left after " + (T ? "your " + m$(T) + " transfer" : "bills") + ". A dip below zero means that stretch borrows from earlier paychecks." }), h("div", { class: "tablewrap" }, tbl)));
@@ -539,20 +564,43 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
   function incomeForm(inc) {
     const isNew = !inc.id;
     const toHouse = h("input", { type: "checkbox", id: "if-house" }); toHouse.checked = inc.toHouse !== false;
+    const kind = h("select", { id: "if-kind", name: "if-kind" },
+      h("option", { value: "regular", selected: !isBonus(inc) || null, text: "Regular paycheck" }),
+      h("option", { value: "bonus", selected: isBonus(inc) || null, text: "Bonus in certain months" }));
+    const months = new Set(inc.months || []);
+    const monthsBox = h("div", { class: "months" }, ...MONTHS.map((mn, i) => { const c = h("input", { type: "checkbox", value: String(i + 1), id: "if-m" + (i + 1) }); c.checked = months.has(i + 1); return h("label", null, c, mn); }));
+    const regular = h("div", { class: "form" },
+      field("A recent deposit date", inp("if-anchor", "date", inc.anchor || iso(TODAY))),
+      field("Every how many days", inp("if-every", "number", inc.everyDays || 14, { min: "1", max: "31" })));
+    const bonus = h("div", { style: "display:grid;gap:8px" },
+      h("div", { class: "small muted", text: "Months it comes" }), monthsBox,
+      h("div", { class: "form" }, field("Lands on the first payday on or after day", inp("if-day", "number", inc.day || 15, { min: "1", max: "31" }))));
+    const sync = () => { regular.hidden = kind.value === "bonus"; bonus.hidden = kind.value !== "bonus"; };
+    kind.addEventListener("change", sync); sync();
     const form = h("form", { class: "panel" },
       h("h3", { text: isNew ? "Add a paycheck" : "Edit " + inc.name }),
       h("div", { class: "form" },
         field("Name", inp("if-name", "text", inc.name || "", { required: true })),
         field("Amount per deposit ($)", inp("if-amount", "number", inc.amount != null ? inc.amount : "", { step: "0.01", min: "0", required: true })),
-        field("A recent deposit date", inp("if-anchor", "date", inc.anchor || iso(TODAY), { required: true })),
-        field("Every how many days", inp("if-every", "number", inc.everyDays || 14, { min: "1", max: "31" }))),
+        field("Type", kind)),
+      regular, bonus,
       h("label", { class: "chk" }, toHouse, "Goes into House (counts toward bills)"),
       h("div", { class: "row" }, h("button", { class: "primary", type: "submit" }, isNew ? "Add paycheck" : "Save"), h("button", { type: "button", onclick: () => { S.editingIncome = null; render(); } }, "Cancel")));
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const f = (id) => form.querySelector("#" + id);
-      const data = { name: f("if-name").value.trim(), amount: Math.round(parseFloat(f("if-amount").value) * 100) / 100 || 0, anchor: f("if-anchor").value, everyDays: parseInt(f("if-every").value, 10) || 14, toHouse: toHouse.checked };
-      if (!data.name || !data.anchor) return;
+      const base = { name: f("if-name").value.trim(), amount: Math.round(parseFloat(f("if-amount").value) * 100) / 100 || 0, toHouse: toHouse.checked };
+      let data;
+      if (kind.value === "bonus") {
+        const ms = [...monthsBox.querySelectorAll("input:checked")].map((c) => Number(c.value));
+        if (!ms.length) { setStatus("Pick at least one month for the bonus.", true); return; }
+        const day = parseInt(f("if-day").value, 10);
+        data = Object.assign(base, { months: ms, day: day >= 1 && day <= 31 ? day : 15 });
+      } else {
+        data = Object.assign(base, { anchor: f("if-anchor").value, everyDays: parseInt(f("if-every").value, 10) || 14, months: [] });
+        if (!data.anchor) { setStatus("Enter a recent deposit date.", true); return; }
+      }
+      if (!data.name) return;
       const id = inc.id || slug(data.name);
       if (await write((db) => db.doc("income/" + id).set(data))) { S.editingIncome = null; setStatus("Saved " + data.name + "."); render(); }
     });
@@ -620,7 +668,7 @@ label.chk { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
     for (const inc of S.income) {
       if (S.editingIncome && S.editingIncome.id === inc.id) { ip.append(incomeForm(inc)); continue; }
       ip.append(h("div", { class: "billrow" },
-        h("div", { class: "what" }, h("span", { class: "t", text: inc.name }), h("div", { class: "meta", text: "every " + (inc.everyDays || 14) + " days from " + short(parse(inc.anchor)) + " · " + (inc.toHouse ? "into House" : "not counted in House") })),
+        h("div", { class: "what" }, h("span", { class: "t", text: inc.name }), h("div", { class: "meta", text: (isBonus(inc) ? "first payday on or after the " + ordinal(Number(inc.day) || 15) + " of " + inc.months.map((x) => MONTHS[x - 1]).join(", ") : "every " + (inc.everyDays || 14) + " days from " + (inc.anchor ? short(parse(inc.anchor)) : "?")) + " · " + (inc.toHouse ? "into House" : "not counted in House") })),
         h("div", { class: "num", text: m$(inc.amount) }),
         h("div", { class: "row" }, h("button", { disabled: S.readOnly || null, onclick: () => { S.editingIncome = inc; render(); } }, "Edit"),
           S.confirmDelete === inc.id

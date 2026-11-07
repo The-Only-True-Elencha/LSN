@@ -32,6 +32,7 @@ All documents live in the artifact's shared database.
   - `anchor`: any past deposit date, `YYYY-MM-DD`
   - `everyDays`: usually 14
   - `toHouse`: whether it counts toward House bills
+  - For a bonus instead of a regular paycheck: `months` (month numbers) and `day`. It lands on the first payday on or after that day in each listed month, and `anchor`/`everyDays` are ignored.
 - `paid/{billId}__{YYYY-MM-DD}`: one document per bill occurrence marked paid, with `billId`, `date`, `amount`, `by` (user id) and `at`
 - `settings/main`
   - `balance`, `balanceDate`: House balance at the end of that day
